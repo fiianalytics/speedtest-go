@@ -4,11 +4,9 @@ import (
 	"embed"
 	"encoding/json"
 	"io"
-	"io/fs"
 	"io/ioutil"
 	"net"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -52,21 +50,11 @@ func ListenAndServe(conf *config.Config) error {
 	r.Use(middleware.NoCache)
 	r.Use(middleware.Recoverer)
 
-	var assetFS http.FileSystem
-	if fi, err := os.Stat(conf.AssetsPath); os.IsNotExist(err) || !fi.IsDir() {
-		log.Warnf("Configured asset path %s does not exist or is not a directory, using default assets", conf.AssetsPath)
-		sub, err := fs.Sub(defaultAssets, "assets")
-		if err != nil {
-			log.Fatalf("Failed when processing default assets: %s", err)
-		}
-		assetFS = http.FS(sub)
-	} else {
-		assetFS = justFilesFilesystem{fs: http.Dir(conf.AssetsPath), readDirBatchSize: 2}
-	}
-
-	r.Get(conf.BaseURL+"/*", pages(assetFS, conf.BaseURL))
 	r.HandleFunc(conf.BaseURL+"/empty", empty)
 	r.HandleFunc(conf.BaseURL+"/backend/empty", empty)
+	r.HandleFunc(conf.BaseURL+"/up", empty)
+	r.Get(conf.BaseURL+"/down", garbage)
+	r.Get(conf.BaseURL+"/ping", ping)
 	r.Get(conf.BaseURL+"/garbage", garbage)
 	r.Get(conf.BaseURL+"/backend/garbage", garbage)
 	r.Get(conf.BaseURL+"/getIP", getIP)
@@ -95,6 +83,14 @@ func ListenAndServe(conf *config.Config) error {
 	go listenProxyProtocol(conf, r)
 
 	return startListener(conf, r)
+}
+
+func ping(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain;charset=UTF-8")
+
+	if _, err := w.Write([]byte("ok")); err != nil {
+		log.Errorf("Error writing back to client %s", err)
+	}
 }
 
 func listenProxyProtocol(conf *config.Config, r *chi.Mux) {
@@ -151,7 +147,7 @@ func garbage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Transfer-Encoding", "binary")
 
 	// chunk size set to 4 by default
-	chunks := 4
+	chunks := 50
 
 	ckSize := r.FormValue("ckSize")
 	if ckSize != "" {
